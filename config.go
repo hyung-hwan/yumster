@@ -16,16 +16,17 @@ import (
 	"os"
 	"path"
 
-	"github.com/FINRAOS/yum-nginx-api/repojson"
+	"github.com/hyung-hwan/yumster/repojson"
 	"github.com/spf13/viper"
 )
 
 const (
-	crError = "config: createrepo_workers is less than 1"
-	mlError = "config: max_content_length is less than 1MB"
-	upError = "config: upload_directory does not exist"
-	ptError = "config: port is not above port 80"
-	mxError = "config: max_retries is less than 1"
+	crError    = "config: createrepo_workers is less than 1"
+	crBinError = "config: createrepo binary not found"
+	mlError    = "config: max_content_length is less than 1MB"
+	upError    = "config: upload_directory does not exist"
+	ptError    = "config: port is not above port 80"
+	mxError    = "config: max_retries is less than 1"
 )
 
 // Some vars are used with different types in handlers vs validation
@@ -39,16 +40,15 @@ var (
 	devMode    bool
 	maxRetries int
 	crCtr      int64
-	crPaths    = [2]string{"/bin/createrepo", "/usr/bin/createrepo"}
+	crPaths    = [3]string{"/bin/createrepo", "/usr/bin/createrepo", "/usr/bin/createrepo_c"}
 	rJSON      []repojson.Repo
 	crBin      string
 )
 
 // Validate configurations and if createrepo binary is present in path
 func configValidate() error {
-	viper.SetConfigName("yumapi")
-	viper.AddConfigPath("/opt/yum-nginx-api/yumapi/")
-	viper.AddConfigPath("/etc/yumapi/")
+	viper.SetConfigName("yumster")
+	viper.AddConfigPath("/etc/yumster/")
 	viper.AddConfigPath(".")
 	err := viper.ReadInConfig()
 	if err != nil {
@@ -92,7 +92,7 @@ func configValidate() error {
 			}
 		}
 		if crBin == "" {
-			return errors.New(crError)
+			return errors.New(crBinError)
 		}
 	}
 	return nil

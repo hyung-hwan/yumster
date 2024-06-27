@@ -12,51 +12,116 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
-	"time"
+	"path/filepath"
+	"syscall"
+	//"time"
 
-	"github.com/FINRAOS/yum-nginx-api/repojson"
-	routing "github.com/go-ozzo/ozzo-routing"
-	"github.com/go-ozzo/ozzo-routing/access"
-	"github.com/go-ozzo/ozzo-routing/content"
-	"github.com/go-ozzo/ozzo-routing/fault"
-	"github.com/go-ozzo/ozzo-routing/slash"
+	routing "github.com/go-ozzo/ozzo-routing/v2"
+	"github.com/go-ozzo/ozzo-routing/v2/access"
+	"github.com/go-ozzo/ozzo-routing/v2/content"
+	"github.com/go-ozzo/ozzo-routing/v2/fault"
+	"github.com/go-ozzo/ozzo-routing/v2/slash"
+	//"github.com/go-ozzo/ozzo-routing/v2/file"
 	"github.com/h2non/filetype"
 )
+
+func open_lock_file() (*os.File, error) {
+	return os.OpenFile(
+		filepath.Join(uploadDir, ".createrepo.lck"),
+		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0666)
+}
+
+func close_lock_file(f *os.File) {
+	f.Close()
+}
+
+func acquire_lock_file(f *os.File, mode int) {
+	syscall.Flock(int(f.Fd()), mode)
+}
+
+func release_lock_file(f *os.File) {
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+}
+
+type repo_chan_struct struct {
+	reponame string
+}
+
+var repo_chan chan repo_chan_struct
+var log *Logger
+
+func update_repo(repodir string) {
+	f, err := open_lock_file()
+	if err != nil {
+		log.Print("Unable to open createrepo lock file ", err.Error())
+	} else {
+		acquire_lock_file(f, syscall.LOCK_EX)
+		crExec := exec.Command(crBin, "--update", "--workers", createRepo, repodir)
+		var out []byte
+		out, err = crExec.CombinedOutput()
+		release_lock_file(f)
+		close_lock_file(f)
+
+		if err != nil {
+			log.Print(fmt.Sprintf("Unable to execute createrepo - %v [%s]", err, out))
+		}
+	}
+}
 
 // crRoutine is a simple buffer to not overload the system
 // by running too many createrepo system commands, uncompress,
 // and sqlite connections at the same time
 func crRoutine() {
+	var rcd repo_chan_struct
+
 	for {
-		if crCtr > 0 {
-			for i := 0; i < maxRetries; i++ {
-				crExec := exec.Command(crBin, "--update", "--workers", createRepo, uploadDir)
-				_, err := crExec.Output()
-				if err != nil {
-					log.Println("Unable to execute createrepo ", err)
-				} else {
-					rJSON, err = repojson.RepoJSON(uploadDir)
-					if err != nil {
-						log.Println(err)
-					}
-					crCtr--
-					break
-				}
-				time.Sleep(1 * time.Second)
-			}
+		select {
+		case rcd = <-repo_chan:
+			log.Print(fmt.Sprintf("UPDATING REPO [%s]", rcd.reponame))
+			update_repo(filepath.Join(uploadDir, rcd.reponame))
 		}
-		time.Sleep(3 * time.Second)
 	}
+
+	/*
+		for {
+			if crCtr > 0 {
+				for i := 0; i < maxRetries; i++ {
+					f, err := open_lock_file()
+					if err != nil {
+						log.Print("Unable to open createrepo lock file ", err)
+					} else  {
+						acquire_lock_file(f, syscall.LOCK_EX)
+						crExec := exec.Command(crBin, "--update", "--workers", createRepo, uploadDir)
+						var out []byte
+						out, err = crExec.CombinedOutput()
+						release_lock_file(f)
+						close_lock_file(f)
+
+						if err != nil {
+							log.Print(fmt.Sprintf("Unable to execute createrepo - %v [%s]", err, out))
+						}
+					}
+					time.Sleep(1 * time.Second)
+				}
+
+			}
+			time.Sleep(5 * time.Second)
+		}
+	*/
 }
 
-// uploadRoute function for handler /upload
-func uploadRoute(c *routing.Context) error {
+// api_upload function for handler /upload
+func api_upload(c *routing.Context) error {
+	var reponame string
+
+	reponame = c.Param("reponame")
+
 	err := c.Request.ParseMultipartForm(maxLength)
 	if err != nil {
 		c.Response.WriteHeader(http.StatusInternalServerError)
@@ -70,8 +135,10 @@ func uploadRoute(c *routing.Context) error {
 		return err
 	}
 	defer file.Close()
-	filePath := uploadDir + handler.Filename
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, 0644)
+	filePath := filepath.Join(uploadDir, reponame, handler.Filename)
+	dirPath := filepath.Join(uploadDir, reponame)
+	os.MkdirAll(dirPath, 0755) // ignore errors
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		c.Response.WriteHeader(http.StatusInternalServerError)
 		_ = c.Write("Upload Failed " + err.Error())
@@ -88,7 +155,7 @@ func uploadRoute(c *routing.Context) error {
 	if kind, err := filetype.Match(buf); err != nil || kind.MIME.Value != "application/x-rpm" {
 		err := os.Remove(filePath)
 		if err != nil {
-			log.Println("Unable to delete " + filePath)
+			log.Print("Unable to delete " + filePath)
 		}
 		c.Response.WriteHeader(http.StatusUnsupportedMediaType)
 		return c.Write(handler.Filename + " not RPM")
@@ -97,26 +164,74 @@ func uploadRoute(c *routing.Context) error {
 	// for command to be ran by go routine crRoutine
 	if !devMode {
 		crCtr++
+		repo_chan <- repo_chan_struct{reponame: reponame}
 	}
 	c.Response.WriteHeader(http.StatusAccepted)
 	return c.Write("Uploaded")
 }
 
-// healthRoute function for handler /health
-func healthRoute(c *routing.Context) error {
+// api_health function for handler /health
+func api_health(c *routing.Context) error {
 	c.Response.Header().Add("Version", commitHash)
 	return c.Write("OK")
 }
 
-// repoRoute function for handler /repo
-func repoRoute(c *routing.Context) error {
-	return c.Write(rJSON)
+// api_repo function for handler /repo
+//func api_repo(c *routing.Context) error {
+//	return c.Write(rJSON)
+//}
+
+func repo_file_access(c *routing.Context) error {
+	var lf *os.File
+	var file *os.File
+	var fstat os.FileInfo
+	var path string
+	var err error
+
+	path = filepath.Join(uploadDir, c.Param("reponame"), c.Param(""))
+
+	lf, err = open_lock_file()
+	if err != nil {
+		return routing.NewHTTPError(http.StatusForbidden, err.Error())
+	}
+
+	acquire_lock_file(lf, syscall.LOCK_SH)
+	file, err = os.Open(path)
+	if err != nil {
+		release_lock_file(lf)
+		close_lock_file(lf)
+		return routing.NewHTTPError(http.StatusNotFound, err.Error())
+	}
+	fstat, err = file.Stat()
+	if err != nil {
+		file.Close()
+		release_lock_file(lf)
+		close_lock_file(lf)
+		return routing.NewHTTPError(http.StatusNotFound, err.Error())
+	} else if fstat.IsDir() {
+		file.Close()
+		release_lock_file(lf)
+		close_lock_file(lf)
+		return routing.NewHTTPError(http.StatusNotFound)
+	}
+	c.Response.Header().Del("Content-Type")
+	http.ServeContent(c.Response, c.Request, path, fstat.ModTime(), file)
+	file.Close()
+	release_lock_file(lf)
+	close_lock_file(lf)
+
+	return nil
 }
 
 func main() {
+	log = NewLogger()
+
 	if err := configValidate(); err != nil {
 		log.Fatalln(err.Error())
 	}
+
+	repo_chan = make(chan repo_chan_struct, 10)
+
 	go crRoutine()
 	rtr := routing.New()
 
@@ -125,16 +240,29 @@ func main() {
 		slash.Remover(http.StatusMovedPermanently),
 		content.TypeNegotiator(content.JSON))
 
+	repo := rtr.Group("/repo",
+		fault.Recovery(log.Printf),
+		slash.Remover(http.StatusMovedPermanently),
+		content.TypeNegotiator(content.JSON))
+
 	// Disable logging on health endpoints
-	api.Get("/health", healthRoute)
+	api.Get("/health", api_health)
 	api.Use(access.Logger(log.Printf))
-	api.Post("/upload", uploadRoute)
-	api.Get("/repo", repoRoute)
+	//api.Post("/upload/<reponame>/*", api_upload
+	api.Post("/upload/<reponame>", api_upload) // support a single level repository /repo/aaa, /repo/bbb, etc
+	//api.Get("/repo", api_repo)
+
+	repo.Use(access.Logger(log.Printf))
+	//repo.Get("/<name>", file.Server(file.PathMap{"/repo/<name>": uploadDir}))
+	//repo.Get("/*", file.Server(file.PathMap{"/repo": uploadDir}))
+	repo.Get("/<reponame>/*", repo_file_access)
 
 	http.Handle("/", rtr)
-	log.Printf("yumapi built-on %s, version %s started on %s \n", builtOn, commitHash, port)
+	log.Printf("built-on %s, version %s started on %s", builtOn, commitHash, port)
 	err := http.ListenAndServe(":"+port, nil)
 	if err != nil {
 		log.Panicln(err)
 	}
+
+	close(repo_chan)
 }

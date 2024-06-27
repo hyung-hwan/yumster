@@ -1,24 +1,9 @@
-version: '3'
 services:
-  nginx:
-    container_name: nginx
-    image: nginx:latest
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-      - ./nginx/mime.types:/etc/nginx/mime.types
-      - ./:/repo
-    network_mode: bridge
-    ports:
-      - "8000:80"
-    restart: always
-    links:
-      - yumapi
-  yumapi:
-    container_name: yumapi
-    image: finraos/yum-nginx-api:latest
-    network_mode: bridge
+  yumster:
+    container_name: yumster
+    image: yumster:latest
     restart: always
     volumes:
-      - ./:/repo
+      - ./repo:/repo
     ports:
       - "8080:8080"
