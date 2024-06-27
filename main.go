@@ -87,33 +87,6 @@ func crRoutine() {
 			update_repo(filepath.Join(uploadDir, rcd.reponame))
 		}
 	}
-
-	/*
-		for {
-			if crCtr > 0 {
-				for i := 0; i < maxRetries; i++ {
-					f, err := open_lock_file()
-					if err != nil {
-						log.Print("Unable to open createrepo lock file ", err)
-					} else  {
-						acquire_lock_file(f, syscall.LOCK_EX)
-						crExec := exec.Command(crBin, "--update", "--workers", createRepo, uploadDir)
-						var out []byte
-						out, err = crExec.CombinedOutput()
-						release_lock_file(f)
-						close_lock_file(f)
-
-						if err != nil {
-							log.Print(fmt.Sprintf("Unable to execute createrepo - %v [%s]", err, out))
-						}
-					}
-					time.Sleep(1 * time.Second)
-				}
-
-			}
-			time.Sleep(5 * time.Second)
-		}
-	*/
 }
 
 // api_upload function for handler /upload
@@ -163,7 +136,6 @@ func api_upload(c *routing.Context) error {
 	// If not in development mode increment create-repo counter
 	// for command to be ran by go routine crRoutine
 	if !devMode {
-		crCtr++
 		repo_chan <- repo_chan_struct{reponame: reponame}
 	}
 	c.Response.WriteHeader(http.StatusAccepted)

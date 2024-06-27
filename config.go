@@ -16,7 +16,6 @@ import (
 	"os"
 	"path"
 
-	"github.com/hyung-hwan/yumster/repojson"
 	"github.com/spf13/viper"
 )
 
@@ -41,7 +40,6 @@ var (
 	maxRetries int
 	crCtr      int64
 	crPaths    = [3]string{"/bin/createrepo", "/usr/bin/createrepo", "/usr/bin/createrepo_c"}
-	rJSON      []repojson.Repo
 	crBin      string
 )
 
