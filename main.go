@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	//"time"
 
@@ -61,8 +62,13 @@ func update_repo(repodir string) {
 	if err != nil {
 		log.Print("Unable to open createrepo lock file ", err.Error())
 	} else {
+		var crExec *exec.Cmd
 		acquire_lock_file(f, syscall.LOCK_EX)
-		crExec := exec.Command(crBin, "--update", "--workers", createRepo, repodir)
+		if strings.HasSuffix(crBin, "_c") {
+			crExec = exec.Command(crBin, "--update", "--compress-type", "bzip2", "--general-compress-type", "bzip2", "--workers", createRepo, repodir)
+		} else {
+			crExec = exec.Command(crBin, "--update", "--workers", createRepo, repodir)
+		}
 		var out []byte
 		out, err = crExec.CombinedOutput()
 		release_lock_file(f)
