@@ -65,7 +65,7 @@ func update_repo(repodir string) {
 		var crExec *exec.Cmd
 		acquire_lock_file(f, syscall.LOCK_EX)
 		if strings.HasSuffix(crBin, "_c") {
-			crExec = exec.Command(crBin, "--update", "--compress-type", "bzip2", "--general-compress-type", "bzip2", "--workers", createRepo, repodir)
+			crExec = exec.Command(crBin, "--update", "--compress-type", "xz", "--general-compress-type", "xz", "--workers", createRepo, repodir)
 		} else {
 			crExec = exec.Command(crBin, "--update", "--workers", createRepo, repodir)
 		}
